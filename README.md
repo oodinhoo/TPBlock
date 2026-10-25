@@ -32,7 +32,7 @@ A TPBlock is an ordinary **lodestone**: nothing tells it apart from the others u
 | Renamed name tag | either | Places a **floating label** (the name tag is not consumed) |
 | Blank name tag | either | Removes the label |
 | Compass | either | Vanilla: binds the compass, the plugin stays out of the way |
-| A block | yes | Vanilla: places the block |
+| A block or any other item | yes | Vanilla: places the block or uses the item |
 
 ### Pairing
 
