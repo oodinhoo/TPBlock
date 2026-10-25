@@ -259,10 +259,11 @@ public final class TPBlock extends JavaPlugin implements Listener {
 
     /**
      * Where to put the feet around a lodestone: on top, else in front of the face clicked at
-     * pairing (block set into a wall), else the first free side. Null if everything is blocked.
+     * pairing (block set into a wall), else the first free side (N/E/S/W) when that front is
+     * blocked too. Null if everything is blocked.
      */
-    // ponytail: no ground check under the feet, and the N/E/S/O fallback only serves
-    // pairs created before the face was remembered.
+    // ponytail: no ground check under the feet: arriving in front of a face with nothing below,
+    // the player falls. Check the block under the feet if players complain.
     private Block arrival(Block lodestone) {
         Block above = lodestone.getRelative(BlockFace.UP);
         if (fits(above)) {
