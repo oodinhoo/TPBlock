@@ -25,6 +25,7 @@ The build must pass with no compiler warning. Drop the jar from `build/libs/` in
 - Match the surrounding code: Java 25, one flat package `fr.tpblock`, same naming and comment style.
 - A deliberate shortcut with a known limit gets a `ponytail:` comment that names the limit and the
   way out.
+- When behavior changes, update the [README](README.md) in the same pull request.
 
 ## Commits and pull requests
 
