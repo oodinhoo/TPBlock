@@ -14,6 +14,7 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
@@ -50,8 +51,12 @@ public final class TPBlock extends JavaPlugin implements Listener {
 
     private static final BlockFace[] SIDES = {BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST};
 
+    /** First block of a pairing and the face clicked on it, written only once the pair is sealed. */
+    private record Selection(Location location, BlockFace face) {
+    }
+
     /** Pairing in progress, deliberately not persisted: disconnecting cancels the selection. */
-    private final Map<UUID, Location> pending = new HashMap<>();
+    private final Map<UUID, Selection> pending = new HashMap<>();
 
     @Override
     public void onEnable() {
@@ -63,7 +68,9 @@ public final class TPBlock extends JavaPlugin implements Listener {
         pending.remove(event.getPlayer().getUniqueId());
     }
 
-    @EventHandler(ignoreCancelled = true)
+    // HIGH: after the protection plugins, so a click they deny is already cancelled and ignored.
+    // Not MONITOR, since this handler cancels the event itself.
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         // PlayerInteractEvent fires twice per click: main hand, then off hand.
         // Without this filter, everything runs twice.
@@ -112,31 +119,34 @@ public final class TPBlock extends JavaPlugin implements Listener {
     }
 
     private void link(Player player, Block block, BlockFace face) {
-        // The clicked face becomes the block's front: we arrive in front of it if the top is blocked.
-        writeFace(block, face);
         Location clicked = block.getLocation();
-        Location first = pending.remove(player.getUniqueId());
+        Selection first = pending.remove(player.getUniqueId());
 
         if (first == null) {
-            pending.put(player.getUniqueId(), clicked);
+            pending.put(player.getUniqueId(), new Selection(clicked, face));
             info(player, "First block selected. Sneak and click the second one.");
             return;
         }
 
-        if (first.equals(clicked)) {
+        if (first.location().equals(clicked)) {
             pending.put(player.getUniqueId(), first);
             deny(player, "A block cannot be paired with itself.");
             return;
         }
 
         // The first block may have been broken while the player crossed the map.
-        if (!first.isWorldLoaded() || first.getBlock().getType() != TP_BLOCK) {
+        if (!first.location().isWorldLoaded() || first.location().getBlock().getType() != TP_BLOCK) {
             deny(player, "The first block is gone. Selection cancelled.");
             return;
         }
 
-        writePair(first.getBlock(), clicked);
-        writePair(block, first);
+        // The face clicked on each block becomes its front: we arrive in front of it if the top
+        // is blocked. Written only now, so an abandoned selection changes nothing.
+        Block firstBlock = first.location().getBlock();
+        writePair(firstBlock, clicked);
+        writeFace(firstBlock, first.face());
+        writePair(block, first.location());
+        writeFace(block, face);
         info(player, "Blocks paired.");
     }
 
@@ -148,6 +158,13 @@ public final class TPBlock extends JavaPlugin implements Listener {
         }
 
         Location destination = decode(raw);
+
+        // The twin's world is not loaded (unloaded by a multiworld plugin, for instance): the
+        // link is not broken, it is kept for when the world comes back.
+        if (destination != null && !destination.isWorldLoaded()) {
+            deny(player, "Destination unavailable.");
+            return;
+        }
 
         // The reciprocity check alone covers a broken block, a replaced block
         // and a block re-paired elsewhere: the destination must point back here.
@@ -173,6 +190,8 @@ public final class TPBlock extends JavaPlugin implements Listener {
         player.teleportAsync(target, PlayerTeleportEvent.TeleportCause.PLUGIN).thenAccept(success -> {
             if (success) {
                 player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 1.0f);
+            } else {
+                deny(player, "Teleport failed."); // e.g. carrying a passenger, or cancelled by another plugin
             }
         });
     }
@@ -199,7 +218,9 @@ public final class TPBlock extends JavaPlugin implements Listener {
     // or WorldEdit leave a floating text and an orphan entry (inert, reciprocity rejects
     // it): /kill @e[tag=tpblock_label,distance=..3] until we listen to
     // EntityExplodeEvent / BlockExplodeEvent, if it ever really happens.
-    @EventHandler(ignoreCancelled = true)
+    // MONITOR: only once no plugin can cancel the break any more, or a protected block would
+    // survive with its pair and label already wiped.
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBreak(BlockBreakEvent event) {
         if (event.getBlock().getType() == TP_BLOCK) {
             removeLabel(event.getBlock());
@@ -228,9 +249,6 @@ public final class TPBlock extends JavaPlugin implements Listener {
     }
 
     private boolean isPairedBackTo(Location destination, Block origin) {
-        if (!destination.isWorldLoaded()) {
-            return false;
-        }
         Block block = destination.getBlock();
         if (block.getType() != TP_BLOCK) {
             return false;
@@ -328,6 +346,7 @@ public final class TPBlock extends JavaPlugin implements Listener {
                 + ":" + location.getBlockZ();
     }
 
+    /** Null if unreadable. A world that is not loaded gives a location without a world. */
     private Location decode(String raw) {
         String[] parts = raw.split(":");
         if (parts.length != 4) {
@@ -335,9 +354,6 @@ public final class TPBlock extends JavaPlugin implements Listener {
         }
         try {
             World world = getServer().getWorld(UUID.fromString(parts[0]));
-            if (world == null) {
-                return null;
-            }
             return new Location(world,
                     Integer.parseInt(parts[1]),
                     Integer.parseInt(parts[2]),

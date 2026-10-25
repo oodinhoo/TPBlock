@@ -21,10 +21,15 @@ java {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+    // "No compiler warning" (CONTRIBUTING.md) is enforced, not just asked.
+    options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
 }
 
 tasks.processResources {
+    // Read at configuration time and declared as an input: a version bump reruns the task.
+    val props = mapOf("version" to project.version)
+    inputs.properties(props)
     filesMatching("paper-plugin.yml") {
-        expand("version" to project.version)
+        expand(props)
     }
 }
