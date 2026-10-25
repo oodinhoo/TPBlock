@@ -65,6 +65,10 @@ Before every teleport, the plugin checks that the twin is still a lodestone that
 was broken, replaced or paired elsewhere, the link is dropped: *Link broken.* Pair it again to reuse
 it.
 
+If the twin is in a world that is not loaded right now (unloaded by a multiworld plugin, for
+instance), the action bar says *Destination unavailable.* and the link is kept for when the world
+comes back.
+
 ## Permissions
 
 | Permission | Default | Grants |
