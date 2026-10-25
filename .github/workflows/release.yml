@@ -1,0 +1,56 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release
+  id-token: write # sign the provenance attestation
+  attestations: write
+
+jobs:
+  jar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the main history, to check the tag is on it
+      # A tag outside main would publish code that was never merged, and tags cannot be moved.
+      - name: Check the tag is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main"
+            exit 1
+          fi
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      # A tag that does not match build.gradle.kts would publish a jar with a wrong version.
+      - name: Check the tag matches build.gradle.kts
+        run: |
+          version=$(bash gradlew -q properties --property version | sed -n 's/^version: //p')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME but build.gradle.kts says $version"
+            exit 1
+          fi
+          echo "JAR=build/libs/TPBlock-$version.jar" >> "$GITHUB_ENV"
+      # The Paper version the jar is compiled against, shown on the release: 26.2.build.112-stable.
+      - name: Read the target Paper version
+        run: echo "PAPER=$(sed -n 's/.*paper-api:\([^"]*\)".*/\1/p' build.gradle.kts | head -1)" >> "$GITHUB_ENV"
+      - run: bash gradlew build
+      - name: Checksum
+        run: (cd "$(dirname "$JAR")" && sha256sum "$(basename "$JAR")") > "$JAR.sha256"
+      # Lets anyone check the jar was built here, from this tag: gh attestation verify.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ env.JAR }}
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$JAR" "$JAR.sha256" \
+            --title "$GITHUB_REF_NAME (Paper ${PAPER%%.build*})" \
+            --notes "For **Paper ${PAPER%%.build*}** servers, built against \`paper-api $PAPER\` with Java 25." \
+            --generate-notes

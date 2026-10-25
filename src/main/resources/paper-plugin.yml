@@ -1,0 +1,12 @@
+name: TPBlock
+version: '${version}'
+main: fr.tpblock.TPBlock
+api-version: '26.2'
+description: Two paired lodestones, a right-click teleports to the twin.
+authors:
+  - Odinho
+
+permissions:
+  tpblock.use:
+    description: Allows pairing lodestones and teleporting through them.
+    default: true

@@ -1,0 +1,358 @@
+package fr.tpblock;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.Sound;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
+import org.bukkit.entity.Display;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.TextDisplay;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * Two paired lodestones. Right-click = teleport to the twin,
+ * sneak + right-click with an empty hand = pairing.
+ *
+ * <p>A lodestone is not a {@code TileState}: it carries no
+ * PersistentDataContainer. The pair therefore lives in the <b>chunk</b> PDC, under
+ * a key derived from the block coordinates. Vanilla saves it with the chunk,
+ * so the plugin still has no persistence layer of its own.
+ */
+public final class TPBlock extends JavaPlugin implements Listener {
+
+    private static final Material TP_BLOCK = Material.LODESTONE;
+
+    /** Marks the TextDisplays the plugin places above a lodestone. */
+    private static final String LABEL_TAG = "tpblock_label";
+
+    /** Text height above the arriving player's feet: just over their head. Tune by eye. */
+    private static final double LABEL_HEIGHT = 1.9;
+
+    private static final BlockFace[] SIDES = {BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST};
+
+    /** Pairing in progress, deliberately not persisted: disconnecting cancels the selection. */
+    private final Map<UUID, Location> pending = new HashMap<>();
+
+    @Override
+    public void onEnable() {
+        getServer().getPluginManager().registerEvents(this, this);
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        pending.remove(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onInteract(PlayerInteractEvent event) {
+        // PlayerInteractEvent fires twice per click: main hand, then off hand.
+        // Without this filter, everything runs twice.
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+
+        Block block = event.getClickedBlock();
+        if (block == null || block.getType() != TP_BLOCK) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        if (!player.hasPermission("tpblock.use")) {
+            return;
+        }
+
+        // A lodestone has a vanilla interaction of its own: binding a compass.
+        // With a compass in hand, we leave the base game alone.
+        Material inHand = player.getInventory().getItemInMainHand().getType();
+        if (inHand == Material.COMPASS) {
+            return;
+        }
+
+        // Name tag in hand: no vanilla interaction on a block, so we take it.
+        if (inHand == Material.NAME_TAG) {
+            event.setCancelled(true);
+            label(player, block, player.getInventory().getItemInMainHand());
+            return;
+        }
+
+        if (player.isSneaking()) {
+            // Empty hand required: with a block in hand, vanilla places it.
+            if (!inHand.isAir()) {
+                return;
+            }
+            event.setCancelled(true);
+            link(player, block, event.getBlockFace());
+        } else {
+            event.setCancelled(true);
+            teleport(player, block);
+        }
+    }
+
+    private void link(Player player, Block block, BlockFace face) {
+        // The clicked face becomes the block's front: we arrive in front of it if the top is blocked.
+        writeFace(block, face);
+        Location clicked = block.getLocation();
+        Location first = pending.remove(player.getUniqueId());
+
+        if (first == null) {
+            pending.put(player.getUniqueId(), clicked);
+            info(player, "First block selected. Sneak and click the second one.");
+            return;
+        }
+
+        if (first.equals(clicked)) {
+            pending.put(player.getUniqueId(), first);
+            deny(player, "A block cannot be paired with itself.");
+            return;
+        }
+
+        // The first block may have been broken while the player crossed the map.
+        if (!first.isWorldLoaded() || first.getBlock().getType() != TP_BLOCK) {
+            deny(player, "The first block is gone. Selection cancelled.");
+            return;
+        }
+
+        writePair(first.getBlock(), clicked);
+        writePair(block, first);
+        info(player, "Blocks paired.");
+    }
+
+    private void teleport(Player player, Block block) {
+        String raw = readPair(block);
+        if (raw == null) {
+            deny(player, "This lodestone is not paired with any other.");
+            return;
+        }
+
+        Location destination = decode(raw);
+
+        // The reciprocity check alone covers a broken block, a replaced block
+        // and a block re-paired elsewhere: the destination must point back here.
+        // ponytail: synchronous read of the destination chunk, so it loads on the
+        // main thread. Switch to World#getChunkAtAsync if cross-world jumps
+        // drop the TPS.
+        if (destination == null || !isPairedBackTo(destination, block)) {
+            clearPair(block);
+            deny(player, "Link broken.");
+            return;
+        }
+
+        Block feet = arrival(destination.getBlock());
+        if (feet == null) {
+            deny(player, "Destination blocked.");
+            return;
+        }
+
+        Location target = feet.getLocation().add(0.5, 0, 0.5);
+        target.setYaw(player.getLocation().getYaw());
+        target.setPitch(player.getLocation().getPitch());
+
+        player.teleportAsync(target, PlayerTeleportEvent.TeleportCause.PLUGIN).thenAccept(success -> {
+            if (success) {
+                player.playSound(player.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 1.0f);
+            }
+        });
+    }
+
+    /** Renamed name tag = places the text, blank name tag = removes it. The name tag is not consumed. */
+    private void label(Player player, Block block, ItemStack tag) {
+        removeLabel(block);
+        Component text = tag.getItemMeta().customName();
+        if (text == null) {
+            info(player, "Text removed.");
+            return;
+        }
+        block.getWorld().spawn(labelLocation(block), TextDisplay.class, display -> {
+            display.addScoreboardTag(LABEL_TAG);
+            display.addScoreboardTag(labelTag(block));
+            display.setBillboard(Display.Billboard.CENTER);
+            display.setPersistent(true);
+            display.text(text);
+        });
+        info(player, "Text placed.");
+    }
+
+    // ponytail: only breaking by hand clears the text and the PDC entry. Explosions, pistons
+    // or WorldEdit leave a floating text and an orphan entry (inert, reciprocity rejects
+    // it): /kill @e[tag=tpblock_label,distance=..3] until we listen to
+    // EntityExplodeEvent / BlockExplodeEvent, if it ever really happens.
+    @EventHandler(ignoreCancelled = true)
+    public void onBreak(BlockBreakEvent event) {
+        if (event.getBlock().getType() == TP_BLOCK) {
+            removeLabel(event.getBlock());
+            clearPair(event.getBlock());
+        }
+    }
+
+    /**
+     * Looks up by the block's own tag, not by position: the arrival spot, and so the text's,
+     * changes if something is built around the lodestone afterwards.
+     */
+    private static void removeLabel(Block block) {
+        String tag = labelTag(block);
+        block.getWorld().getNearbyEntitiesByType(TextDisplay.class, block.getLocation().add(0.5, 0.5, 0.5), 4,
+                display -> display.getScoreboardTags().contains(tag)).forEach(Entity::remove);
+    }
+
+    private static String labelTag(Block block) {
+        return LABEL_TAG + "_" + block.getX() + "_" + block.getY() + "_" + block.getZ();
+    }
+
+    /** Above the arrival spot, or above the block itself if it is fully walled in. */
+    private Location labelLocation(Block block) {
+        Block feet = arrival(block);
+        return (feet != null ? feet : block.getRelative(BlockFace.UP)).getLocation().add(0.5, LABEL_HEIGHT, 0.5);
+    }
+
+    private boolean isPairedBackTo(Location destination, Block origin) {
+        if (!destination.isWorldLoaded()) {
+            return false;
+        }
+        Block block = destination.getBlock();
+        if (block.getType() != TP_BLOCK) {
+            return false;
+        }
+        String raw = readPair(block);
+        return raw != null && raw.equals(encode(origin.getLocation()));
+    }
+
+    /**
+     * Where to put the feet around a lodestone: on top, else in front of the face clicked at
+     * pairing (block set into a wall), else the first free side. Null if everything is blocked.
+     */
+    // ponytail: no ground check under the feet, and the N/E/S/O fallback only serves
+    // pairs created before the face was remembered.
+    private Block arrival(Block lodestone) {
+        Block above = lodestone.getRelative(BlockFace.UP);
+        if (fits(above)) {
+            return above;
+        }
+        BlockFace front = readFace(lodestone);
+        if (front != null) {
+            Block feet = beside(lodestone, front);
+            if (feet != null) {
+                return feet;
+            }
+        }
+        for (BlockFace face : SIDES) {
+            Block feet = beside(lodestone, face);
+            if (feet != null) {
+                return feet;
+            }
+        }
+        return null;
+    }
+
+    /** In front of a face: first one block lower (block at eye level), then at the same level. */
+    private static Block beside(Block lodestone, BlockFace face) {
+        Block side = lodestone.getRelative(face);
+        if (fits(side.getRelative(BlockFace.DOWN))) {
+            return side.getRelative(BlockFace.DOWN);
+        }
+        return fits(side) ? side : null;
+    }
+
+    /** Two free blocks: feet and head. */
+    private static boolean fits(Block feet) {
+        return isSafe(feet) && isSafe(feet.getRelative(BlockFace.UP));
+    }
+
+    /** Water is a valid arrival, lava is not: isPassable() says yes to both. */
+    private static boolean isSafe(Block block) {
+        return block.isPassable() && block.getType() != Material.LAVA;
+    }
+
+    // --- Storage: chunk PDC, one key per block ------------------------------
+
+    /** PDC key of the block in its chunk. The '-' of negative coordinates is legal. */
+    private NamespacedKey keyFor(String prefix, Block block) {
+        return new NamespacedKey(this, prefix + "_" + block.getX() + "_" + block.getY() + "_" + block.getZ());
+    }
+
+    private String readPair(Block block) {
+        return block.getChunk().getPersistentDataContainer().get(keyFor("pair", block), PersistentDataType.STRING);
+    }
+
+    private void writePair(Block block, Location target) {
+        block.getChunk().getPersistentDataContainer()
+                .set(keyFor("pair", block), PersistentDataType.STRING, encode(target));
+    }
+
+    private void clearPair(Block block) {
+        block.getChunk().getPersistentDataContainer().remove(keyFor("pair", block));
+        block.getChunk().getPersistentDataContainer().remove(keyFor("face", block));
+    }
+
+    private void writeFace(Block block, BlockFace face) {
+        block.getChunk().getPersistentDataContainer()
+                .set(keyFor("face", block), PersistentDataType.STRING, face.name());
+    }
+
+    private BlockFace readFace(Block block) {
+        String raw = block.getChunk().getPersistentDataContainer().get(keyFor("face", block), PersistentDataType.STRING);
+        try {
+            return raw == null ? null : BlockFace.valueOf(raw);
+        } catch (IllegalArgumentException exception) {
+            return null; // unreadable PDC: fall back to the first free side
+        }
+    }
+
+    /** Stored value: "worldUuid:x:y:z". The UUID contains no ':'. */
+    private static String encode(Location location) {
+        return location.getWorld().getUID()
+                + ":" + location.getBlockX()
+                + ":" + location.getBlockY()
+                + ":" + location.getBlockZ();
+    }
+
+    private Location decode(String raw) {
+        String[] parts = raw.split(":");
+        if (parts.length != 4) {
+            return null;
+        }
+        try {
+            World world = getServer().getWorld(UUID.fromString(parts[0]));
+            if (world == null) {
+                return null;
+            }
+            return new Location(world,
+                    Integer.parseInt(parts[1]),
+                    Integer.parseInt(parts[2]),
+                    Integer.parseInt(parts[3]));
+        } catch (IllegalArgumentException exception) {
+            return null; // unreadable PDC: treated as a broken link
+        }
+    }
+
+    private static void info(Player player, String message) {
+        player.sendActionBar(Component.text(message, NamedTextColor.AQUA));
+    }
+
+    private static void deny(Player player, String message) {
+        player.sendActionBar(Component.text(message, NamedTextColor.RED));
+        player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+    }
+}
