@@ -23,6 +23,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -50,6 +51,10 @@ public final class TPBlock extends JavaPlugin implements Listener {
     private static final double LABEL_HEIGHT = 1.9;
 
     private static final BlockFace[] SIDES = {BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST};
+
+    /** Prefixes of the chunk PDC keys: pair_x_y_z holds the twin, face_x_y_z the front. */
+    private static final String PAIR_KEY = "pair";
+    private static final String FACE_KEY = "face";
 
     /** First block of a pairing and the face clicked on it, written only once the pair is sealed. */
     private record Selection(Location location, BlockFace face) {
@@ -239,7 +244,7 @@ public final class TPBlock extends JavaPlugin implements Listener {
     }
 
     private static String labelTag(Block block) {
-        return LABEL_TAG + "_" + block.getX() + "_" + block.getY() + "_" + block.getZ();
+        return LABEL_TAG + "_" + coords(block);
     }
 
     /** Above the arrival spot, or above the block itself if it is fully walled in. */
@@ -306,32 +311,39 @@ public final class TPBlock extends JavaPlugin implements Listener {
 
     // --- Storage: chunk PDC, one key per block ------------------------------
 
-    /** PDC key of the block in its chunk. The '-' of negative coordinates is legal. */
+    /** "x_y_z", shared by the PDC keys and the label tag of a block. The '-' of negative coordinates is legal. */
+    private static String coords(Block block) {
+        return block.getX() + "_" + block.getY() + "_" + block.getZ();
+    }
+
+    /** PDC key of the block in its chunk. */
     private NamespacedKey keyFor(String prefix, Block block) {
-        return new NamespacedKey(this, prefix + "_" + block.getX() + "_" + block.getY() + "_" + block.getZ());
+        return new NamespacedKey(this, prefix + "_" + coords(block));
+    }
+
+    private static PersistentDataContainer pdc(Block block) {
+        return block.getChunk().getPersistentDataContainer();
     }
 
     private String readPair(Block block) {
-        return block.getChunk().getPersistentDataContainer().get(keyFor("pair", block), PersistentDataType.STRING);
+        return pdc(block).get(keyFor(PAIR_KEY, block), PersistentDataType.STRING);
     }
 
     private void writePair(Block block, Location target) {
-        block.getChunk().getPersistentDataContainer()
-                .set(keyFor("pair", block), PersistentDataType.STRING, encode(target));
+        pdc(block).set(keyFor(PAIR_KEY, block), PersistentDataType.STRING, encode(target));
     }
 
     private void clearPair(Block block) {
-        block.getChunk().getPersistentDataContainer().remove(keyFor("pair", block));
-        block.getChunk().getPersistentDataContainer().remove(keyFor("face", block));
+        pdc(block).remove(keyFor(PAIR_KEY, block));
+        pdc(block).remove(keyFor(FACE_KEY, block));
     }
 
     private void writeFace(Block block, BlockFace face) {
-        block.getChunk().getPersistentDataContainer()
-                .set(keyFor("face", block), PersistentDataType.STRING, face.name());
+        pdc(block).set(keyFor(FACE_KEY, block), PersistentDataType.STRING, face.name());
     }
 
     private BlockFace readFace(Block block) {
-        String raw = block.getChunk().getPersistentDataContainer().get(keyFor("face", block), PersistentDataType.STRING);
+        String raw = pdc(block).get(keyFor(FACE_KEY, block), PersistentDataType.STRING);
         try {
             return raw == null ? null : BlockFace.valueOf(raw);
         } catch (IllegalArgumentException exception) {
