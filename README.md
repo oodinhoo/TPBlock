@@ -18,7 +18,7 @@ Building from source requires **JDK 25** (mandatory since Minecraft 26.1).
 .\gradlew.bat build      # -> build/libs/TPBlock-1.0.0.jar
 ```
 
-Built against `io.papermc.paper:paper-api:26.2.build.119-stable` (Gradle 9.7.1). Drop the jar into
+Built against `io.papermc.paper:paper-api:26.2.build.119-stable` (Gradle 9.8.2). Drop the jar into
 the `plugins/` folder of a **Paper 26.2** server.
 
 ## Using it
