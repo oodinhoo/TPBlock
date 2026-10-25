@@ -5,7 +5,7 @@ on:
     # Documentation only: nothing to build. A change touching any other file still runs it.
     paths-ignore: ["**.md", "docs/**", "LICENSE", ".github/ISSUE_TEMPLATE/**"]
   # Every pull request runs it, docs included: "build" is a required check to merge, and a
-  # skipped workflow would leave it pending forever.
+  # skipped workflow would leave it pending forever. The "changes" job skips the build instead.
   pull_request:
 
 permissions:
@@ -18,7 +18,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Documentation only (same list as paths-ignore): the build is skipped, which GitHub counts as a
+  # success for the required check.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2 # the pull request merge commit and its base
+      - id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] &&
+            git diff --quiet HEAD^ HEAD -- . ':!*.md' ':!docs' ':!LICENSE' ':!.github/ISSUE_TEMPLATE'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # Linux: the platform of most Paper servers.
     runs-on: ubuntu-latest
     steps:
