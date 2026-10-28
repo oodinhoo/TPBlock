@@ -18,7 +18,7 @@ Requires **JDK 25**.
 ```
 
 The build must pass with no compiler warning. Drop the jar from `build/libs/` into a
-**Paper 26.2** server to try your change, and say in the pull request how you checked it in game.
+**Paper 26.3** server to try your change, and say in the pull request how you checked it in game.
 
 ## Code
 

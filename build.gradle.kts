@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "fr.tpblock"
-version = "1.0.1"
+version = "1.1.0"
 
 repositories {
     mavenCentral()
@@ -12,7 +12,7 @@ repositories {
 
 dependencies {
     // 26.x coordinate: no more "-R0.1-SNAPSHOT", the format is <version>.build.<number>-<stage>.
-    compileOnly("io.papermc.paper:paper-api:26.2.build.119-stable")
+    compileOnly("io.papermc.paper:paper-api:26.3.build.227-stable")
 }
 
 java {

@@ -1,7 +1,7 @@
 name: TPBlock
 version: '${version}'
 main: fr.tpblock.TPBlock
-api-version: '26.2'
+api-version: '26.3'
 description: Two paired lodestones, a right-click teleports to the twin.
 authors:
   - Odinho
