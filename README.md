@@ -15,11 +15,11 @@ provenance attestation (`gh attestation verify TPBlock-<version>.jar --repo oodi
 Building from source requires **JDK 25** (mandatory since Minecraft 26.1).
 
 ```powershell
-.\gradlew.bat build      # -> build/libs/TPBlock-1.0.1.jar
+.\gradlew.bat build      # -> build/libs/TPBlock-1.1.0.jar
 ```
 
-Built against `io.papermc.paper:paper-api:26.2.build.119-stable` (Gradle 9.8.2). Drop the jar into
-the `plugins/` folder of a **Paper 26.2** server.
+Built against `io.papermc.paper:paper-api:26.3.build.227-stable` (Gradle 9.8.2). Drop the jar into
+the `plugins/` folder of a **Paper 26.3** server.
 
 ## Using it
 
